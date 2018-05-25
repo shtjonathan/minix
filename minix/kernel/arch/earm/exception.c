@@ -109,6 +109,36 @@ static void pagefault( struct proc *pr,
 	return;
 }
 
+static void
+data_abort(int is_nested, struct proc *pr, reg_t *saved_lr,
+		       struct ex_s *ep, u32_t dfar, u32_t dfsr)
+{
+	/* Extract fault status bit [0:3, 10] from DFSR */
+	u32_t fs = dfsr & 0x0F;
+	fs |= ((dfsr >> 6) & 0x10);
+
+	 /* Translation and permission faults are handled as pagefaults. */
+	if (is_trans_fault(fs) || is_perm_fault(fs)) {
+		pagefault(pr, saved_lr, is_nested, dfar, dfsr);
+	} else if (!is_nested) {
+		/* A user process caused some other kind of data abort. */
+		int signum = SIGSEGV;
+
+		if (is_align_fault(fs)) {
+			signum = SIGBUS;
+		} else {
+			printf("KERNEL: unknown data abort by proc %d sending "
+			       "SIGSEGV (dfar=0x%lx dfsr=0x%lx fs=0x%lx)\n",
+			       proc_nr(pr), dfar, dfsr, fs);
+		}
+		cause_sig(proc_nr(pr), signum);
+	} else { /* is_nested */
+		printf("KERNEL: inkernel data abort - disaster (dfar=0x%lx "
+		       "dfsr=0x%lx fs=0x%lx)\n", dfar, dfsr, fs);
+		inkernel_disaster(pr, saved_lr, ep, is_nested);
+	}
+}
+
 static void inkernel_disaster(struct proc *saved_proc,
 	reg_t *saved_lr, struct ex_s *ep,
 	int is_nested)
@@ -171,7 +201,7 @@ void exception_handler(int is_nested, reg_t *saved_lr, int vector)
   }
 
   if (vector == DATA_ABORT_VECTOR) {
-	pagefault(saved_proc, saved_lr, is_nested, read_dfar(), read_dfsr());
+	data_abort(is_nested, saved_proc, saved_lr, ep, read_dfar(), read_dfsr());
 	return;
   }
 
